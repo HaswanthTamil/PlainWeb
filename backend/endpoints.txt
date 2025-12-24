@@ -13,6 +13,60 @@ POST /audit
     "cachedAt": timestamp,
     "report": {
       "lhr": object (Lighthouse Result),
-      "geminiAnalysis": string (Markdown analysis)
+      "geminiAnalysis": string (Markdown analysis),
+      "accessibilityIssues": {
+        "issues": [
+          {
+            "rule": string,
+            "wcag": string,
+            "severity": "critical" | "serious" | "moderate" | "minor",
+            "failedElements": number,
+            "impact": string,
+            "autoFixPotential": "high" | "medium" | "low"
+          }
+        ]
+      },
+      "fixBuckets": {
+        "buckets": [
+          {
+            "bucketName": string,
+            "relatedRules": string[],
+            "totalFailures": number,
+            "highestSeverity": "critical" | "serious" | "moderate" | "minor",
+            "autoFixable": "yes" | "partial" | "no"
+          }
+        ]
+      },
+      "accessibilityAnalysis": string (Human-readable expert briefing),
+      "ownerSummary": string (Friendly summary for non-technical owners, max 120 words)
     }
   }
+
+GET /audit/raw?url=https://example.com
+- Description: Returns raw Lighthouse JSON (before filtering)
+- Note: Raw data is not stored. Use /audit/filtered instead.
+- Response: { "message": "..." }
+
+GET /audit/filtered?url=https://example.com
+- Description: Returns filtered Lighthouse JSON (with passing audits removed)
+- Response: { "lhr": object }
+
+GET /audit/issues?url=https://example.com
+- Description: Returns WCAG-enriched accessibility issues
+- Response: { "issues": [...] }
+
+GET /audit/buckets?url=https://example.com
+- Description: Returns fix buckets grouped by DOM-level strategy
+- Response: { "buckets": [...] }
+
+GET /audit/analysis?url=https://example.com
+- Description: Returns expert analysis prompts (both accessibility and Gemini)
+- Response: { 
+    "analysis": string (Accessibility expert briefing),
+    "geminiAnalysis": string (Gemini performance analysis)
+  }
+
+GET /audit/summary?url=https://example.com
+- Description: Returns friendly owner summary (non-technical, max 120 words)
+- Response: { "summary": string }
+
