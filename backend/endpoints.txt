@@ -1,0 +1,18 @@
+BASE_URL (Local): http://localhost:5001/plainweb-backend/us-central1/api
+
+GET /
+- Health check
+- Response: { "ok": true, "service": "plainweb-audit" }
+
+POST /audit
+- Body: { "url": "https://example.com", "force": boolean (optional) }
+- Description: Generates or retrieves cached Lighthouse report and Gemini analysis.
+- Response:
+  {
+    "cached": boolean,
+    "cachedAt": timestamp,
+    "report": {
+      "lhr": object (Lighthouse Result),
+      "geminiAnalysis": string (Markdown analysis)
+    }
+  }

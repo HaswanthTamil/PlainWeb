@@ -87,14 +87,25 @@ app.post("/audit", async (req, res) => {
         let chrome;
         try {
             chrome = await chromeLauncher.launch({
-                chromeFlags: ["--headless", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
+                chromeFlags: [
+                    "--headless",
+                    "--no-sandbox",
+                    "--disable-gpu",
+                    "--disable-dev-shm-usage",
+                ],
             });
         }
         catch (e) {
             console.error("Failed to launch chrome", e);
-            return res.status(500).json({ error: "Failed to launch browser environment" });
+            return res
+                .status(500)
+                .json({ error: "Failed to launch browser environment" });
         }
-        const options = { port: chrome.port, output: "json", logLevel: "info" };
+        const options = {
+            port: chrome.port,
+            output: "json",
+            logLevel: "info",
+        };
         let runnerResult;
         try {
             // Dynamic import for Lighthouse (ESM)
@@ -148,7 +159,11 @@ app.post("/audit", async (req, res) => {
         // 5. Filter and Store
         const audits = lhr.audits;
         const filteredAudits = {};
-        const excludedAudits = ['screenshot-thumbnails', 'final-screenshot', 'errors-in-console'];
+        const excludedAudits = [
+            "screenshot-thumbnails",
+            "final-screenshot",
+            "errors-in-console",
+        ];
         for (const [key, audit] of Object.entries(audits)) {
             if (excludedAudits.includes(key))
                 continue;
@@ -168,13 +183,37 @@ app.post("/audit", async (req, res) => {
         delete lhr.entities;
         delete lhr.timing;
         if (lhr.fullPageScreenshot) {
-            delete lhr.fullPageScreenshot.screenshot;
+            delete lhr.fullPageScreenshot;
         }
         // Prune empty fields recursively
         const prunedLhr = pruneEmpty(lhr);
+        // Remove `performance` category from categories if present
+        if (prunedLhr && prunedLhr.categories) {
+            delete prunedLhr.categories.performance;
+        }
+        // Recursively remove any `description` fields from the report
+        function removeDescriptions(obj) {
+            if (!obj || typeof obj !== "object")
+                return;
+            if (Array.isArray(obj)) {
+                for (const item of obj)
+                    removeDescriptions(item);
+                return;
+            }
+            for (const key of Object.keys(obj)) {
+                if (key === "description") {
+                    delete obj[key];
+                    continue;
+                }
+                const val = obj[key];
+                if (typeof val === "object" && val !== null)
+                    removeDescriptions(val);
+            }
+        }
+        removeDescriptions(prunedLhr);
         const reportToStore = {
             lhr: JSON.parse(JSON.stringify(prunedLhr)), // Ensure plain object
-            geminiAnalysis
+            geminiAnalysis,
         };
         await docRef.set({
             report: reportToStore,
@@ -183,34 +222,36 @@ app.post("/audit", async (req, res) => {
         });
         return res.json({
             cached: false,
-            report: reportToStore
+            report: reportToStore,
         });
     }
     catch (err) {
         console.error(err);
-        require('fs').appendFileSync('error.log', `${new Date().toISOString()} - ${err.message}\n${err.stack}\n\n`);
-        return res.status(500).json({ error: "internal error", details: err.message });
+        require("fs").appendFileSync("error.log", `${new Date().toISOString()} - ${err.message}\n${err.stack}\n\n`);
+        return res
+            .status(500)
+            .json({ error: "internal error", details: err.message });
     }
 });
 // Helper to simplify audit details
 function simplifyItems(items, limit = 5) {
     if (!Array.isArray(items))
         return [];
-    return items.slice(0, limit).map(item => ({
+    return items.slice(0, limit).map((item) => ({
         node: item.node?.nodeLabel || "unknown",
         selector: item.node?.selector || null,
-        explanation: item.explanation || item.failureReason || null
+        explanation: item.explanation || item.failureReason || null,
     }));
 }
 // Recursive function to prune empty fields
 function pruneEmpty(obj) {
-    if (obj === null || obj === undefined || obj === '')
+    if (obj === null || obj === undefined || obj === "")
         return undefined;
     if (Array.isArray(obj)) {
-        const result = obj.map(pruneEmpty).filter(v => v !== undefined);
+        const result = obj.map(pruneEmpty).filter((v) => v !== undefined);
         return result.length > 0 ? result : undefined;
     }
-    if (typeof obj === 'object') {
+    if (typeof obj === "object") {
         const result = {};
         for (const key in obj) {
             const val = pruneEmpty(obj[key]);
@@ -222,7 +263,9 @@ function pruneEmpty(obj) {
     }
     return obj;
 }
-exports.api = functions.runWith({
+exports.api = functions
+    .runWith({
     timeoutSeconds: 300,
     memory: "2GB", // Chrome needs RAM
-}).https.onRequest(app);
+})
+    .https.onRequest(app);
