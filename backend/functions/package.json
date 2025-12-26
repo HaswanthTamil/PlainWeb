@@ -9,7 +9,7 @@
     "build": "tsc",
     "deploy": "firebase deploy --only functions",
     "serve": "firebase emulators:start --only functions,firestore",
-    "start": "npm run build && npm run deploy"
+    "start": "npm run build && npm run serve"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
