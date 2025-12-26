@@ -1,6 +1,6 @@
 import { onRequest } from "firebase-functions/v2/https";
 import * as admin from "firebase-admin";
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import express, { Request, Response } from "express";
 import * as chromeLauncher from "chrome-launcher";
 import { GoogleGenerativeAI } from "@google/generative-ai";
@@ -9,7 +9,7 @@ import cors from "cors";
 
 admin.initializeApp();
 
-const db = admin.firestore();
+const db = getFirestore("lighthouse");
 db.settings({
   ignoreUndefinedProperties: true,
   ...(process.env.FIRESTORE_EMULATOR_HOST ? {
@@ -711,9 +711,19 @@ app.get("/", (_req, res) => res.json({ ok: true, service: "plainweb-audit-servic
 
 
 function normalizeUrl(input: string) {
-  const u = new URL(input);
-  u.hash = "";
-  return u.toString().replace(/\/$/, "");
+  try {
+    const u = new URL(input);
+    u.hash = "";
+    // Remove trailing slash and force lowercase for consistency
+    return u.toString().replace(/\/$/, "").toLowerCase();
+  } catch (e) {
+    throw new Error("Invalid URL");
+  }
+}
+
+function getDocId(url: string) {
+  const normalized = normalizeUrl(url);
+  return crypto.createHash("sha256").update(normalized).digest("hex");
 }
 
 function deepRemoveKeys(obj: any, keysToRemove: string[]) {
@@ -733,14 +743,8 @@ app.post("/audit/raw", async (req, res) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: "missing url parameter" });
 
-    // Validate URL
-    try {
-      new URL(url);
-    } catch (e) {
-      return res.status(400).json({ error: "invalid url" });
-    }
-
-    const docId = crypto.createHash("sha256").update(String(url)).digest("hex");
+    const normalized = normalizeUrl(url);
+    const docId = getDocId(normalized);
     const docRef = db.collection("audits").doc(docId);
 
     // Run Lighthouse
@@ -806,11 +810,15 @@ app.post("/audit/raw", async (req, res) => {
       categorizedAudits: pruneEmpty(categorizedAudits),
     };
 
-    await docRef.set({
-      report: reportToStore,
-      url: String(url),
-      cachedAt: FieldValue.serverTimestamp(),
-    });
+    try {
+      await docRef.set({
+        report: reportToStore,
+        url: normalized,
+        cachedAt: FieldValue.serverTimestamp(),
+      });
+    } catch (dbErr: any) {
+      console.error(`Error saving to Firestore: ${dbErr.message}`);
+    }
 
     return res.json(reportToStore);
   } catch (err: any) {
@@ -829,19 +837,7 @@ app.post("/audit/filtered", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "missing url" });
     }
 
-    // Normalize URL (MUST match /audit)
-    let normalizedUrl: string;
-    try {
-      normalizedUrl = normalizeUrl(url);
-    } catch {
-      return res.status(400).json({ error: "invalid url" });
-    }
-
-    const docId = crypto
-      .createHash("sha256")
-      .update(normalizedUrl)
-      .digest("hex");
-
+    const docId = getDocId(url);
     const doc = await db.collection("audits").doc(docId).get();
     if (!doc.exists) {
       return res.status(404).json({ error: "not found" });
@@ -882,7 +878,7 @@ app.post("/audit/analysis", async (req, res) => {
   try {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: "missing url" });
-    const docId = crypto.createHash("sha256").update(url).digest("hex");
+    const docId = getDocId(url);
     const doc = await db.collection("audits").doc(docId).get();
     if (!doc.exists) return res.status(404).json({ error: "not found" });
     return res.json({ analysis: doc.data()?.report?.accessibilityAnalysis || "" });
@@ -895,7 +891,7 @@ app.post("/audit/summary", async (req, res) => {
   try {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: "missing url" });
-    const docId = crypto.createHash("sha256").update(url).digest("hex");
+    const docId = getDocId(url);
     const doc = await db.collection("audits").doc(docId).get();
     if (!doc.exists) return res.status(404).json({ error: "not found" });
     return res.json({ summary: doc.data()?.report?.ownerSummary || "" });

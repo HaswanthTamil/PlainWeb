@@ -46,7 +46,7 @@ const generative_ai_1 = require("@google/generative-ai");
 const crypto = __importStar(require("crypto"));
 const cors_1 = __importDefault(require("cors"));
 admin.initializeApp();
-const db = admin.firestore();
+const db = (0, firestore_1.getFirestore)("lighthouse");
 db.settings({
     ignoreUndefinedProperties: true,
     ...(process.env.FIRESTORE_EMULATOR_HOST ? {
@@ -666,9 +666,19 @@ app.use((0, cors_1.default)({ origin: true }));
 app.use(express_1.default.json());
 app.get("/", (_req, res) => res.json({ ok: true, service: "plainweb-audit-service" }));
 function normalizeUrl(input) {
-    const u = new URL(input);
-    u.hash = "";
-    return u.toString().replace(/\/$/, "");
+    try {
+        const u = new URL(input);
+        u.hash = "";
+        // Remove trailing slash and force lowercase for consistency
+        return u.toString().replace(/\/$/, "").toLowerCase();
+    }
+    catch (e) {
+        throw new Error("Invalid URL");
+    }
+}
+function getDocId(url) {
+    const normalized = normalizeUrl(url);
+    return crypto.createHash("sha256").update(normalized).digest("hex");
 }
 function deepRemoveKeys(obj, keysToRemove) {
     if (!obj || typeof obj !== "object")
@@ -687,14 +697,8 @@ app.post("/audit/raw", async (req, res) => {
         const { url } = req.body;
         if (!url)
             return res.status(400).json({ error: "missing url parameter" });
-        // Validate URL
-        try {
-            new URL(url);
-        }
-        catch (e) {
-            return res.status(400).json({ error: "invalid url" });
-        }
-        const docId = crypto.createHash("sha256").update(String(url)).digest("hex");
+        const normalized = normalizeUrl(url);
+        const docId = getDocId(normalized);
         const docRef = db.collection("audits").doc(docId);
         // Run Lighthouse
         console.log(`Running Lighthouse for ${url}...`);
@@ -752,11 +756,16 @@ app.post("/audit/raw", async (req, res) => {
             expertFixGuide,
             categorizedAudits: pruneEmpty(categorizedAudits),
         };
-        await docRef.set({
-            report: reportToStore,
-            url: String(url),
-            cachedAt: firestore_1.FieldValue.serverTimestamp(),
-        });
+        try {
+            await docRef.set({
+                report: reportToStore,
+                url: normalized,
+                cachedAt: firestore_1.FieldValue.serverTimestamp(),
+            });
+        }
+        catch (dbErr) {
+            console.error(`Error saving to Firestore: ${dbErr.message}`);
+        }
         return res.json(reportToStore);
     }
     catch (err) {
@@ -771,18 +780,7 @@ app.post("/audit/filtered", async (req, res) => {
         if (!url) {
             return res.status(400).json({ error: "missing url" });
         }
-        // Normalize URL (MUST match /audit)
-        let normalizedUrl;
-        try {
-            normalizedUrl = normalizeUrl(url);
-        }
-        catch {
-            return res.status(400).json({ error: "invalid url" });
-        }
-        const docId = crypto
-            .createHash("sha256")
-            .update(normalizedUrl)
-            .digest("hex");
+        const docId = getDocId(url);
         const doc = await db.collection("audits").doc(docId).get();
         if (!doc.exists) {
             return res.status(404).json({ error: "not found" });
@@ -818,7 +816,7 @@ app.post("/audit/analysis", async (req, res) => {
         const { url } = req.body;
         if (!url)
             return res.status(400).json({ error: "missing url" });
-        const docId = crypto.createHash("sha256").update(url).digest("hex");
+        const docId = getDocId(url);
         const doc = await db.collection("audits").doc(docId).get();
         if (!doc.exists)
             return res.status(404).json({ error: "not found" });
@@ -833,7 +831,7 @@ app.post("/audit/summary", async (req, res) => {
         const { url } = req.body;
         if (!url)
             return res.status(400).json({ error: "missing url" });
-        const docId = crypto.createHash("sha256").update(url).digest("hex");
+        const docId = getDocId(url);
         const doc = await db.collection("audits").doc(docId).get();
         if (!doc.exists)
             return res.status(404).json({ error: "not found" });
