@@ -665,6 +665,23 @@ const app = (0, express_1.default)();
 app.use((0, cors_1.default)({ origin: true }));
 app.use(express_1.default.json());
 app.get("/", (_req, res) => res.json({ ok: true, service: "plainweb-audit-service" }));
+function normalizeUrl(input) {
+    const u = new URL(input);
+    u.hash = "";
+    return u.toString().replace(/\/$/, "");
+}
+function deepRemoveKeys(obj, keysToRemove) {
+    if (!obj || typeof obj !== "object")
+        return;
+    for (const key of Object.keys(obj)) {
+        if (keysToRemove.includes(key)) {
+            delete obj[key];
+        }
+        else {
+            deepRemoveKeys(obj[key], keysToRemove);
+        }
+    }
+}
 app.post("/audit/raw", async (req, res) => {
     try {
         const { url } = req.body;
@@ -751,31 +768,49 @@ app.post("/audit/raw", async (req, res) => {
 app.post("/audit/filtered", async (req, res) => {
     try {
         const { url } = req.body;
-        if (!url)
+        if (!url) {
             return res.status(400).json({ error: "missing url" });
-        const docId = crypto.createHash("sha256").update(url).digest("hex");
+        }
+        // Normalize URL (MUST match /audit)
+        let normalizedUrl;
+        try {
+            normalizedUrl = normalizeUrl(url);
+        }
+        catch {
+            return res.status(400).json({ error: "invalid url" });
+        }
+        const docId = crypto
+            .createHash("sha256")
+            .update(normalizedUrl)
+            .digest("hex");
         const doc = await db.collection("audits").doc(docId).get();
-        if (!doc.exists)
+        if (!doc.exists) {
             return res.status(404).json({ error: "not found" });
+        }
         const lhr = doc.data()?.report?.lhr;
-        if (!lhr || !lhr.audits)
+        if (!lhr || !lhr.audits) {
             return res.json({ audits: {} });
+        }
         const filteredAudits = {};
-        for (const [key, audit] of Object.entries(lhr.audits)) {
-            if (audit.score === 0) {
+        for (const [auditKey, audit] of Object.entries(lhr.audits)) {
+            if (audit?.score === 0) {
+                // Clone to avoid mutating stored LHR
                 const auditCopy = JSON.parse(JSON.stringify(audit));
-                // Prune unwanted fields
-                delete auditCopy.debugData;
-                if (auditCopy.details) {
-                    delete auditCopy.details.items;
-                }
-                filteredAudits[key] = auditCopy;
+                // Remove noisy / heavy fields everywhere
+                deepRemoveKeys(auditCopy, ["items", "debugData"]);
+                filteredAudits[auditKey] = auditCopy;
             }
         }
-        return res.json({ audits: filteredAudits });
+        return res.json({
+            audits: filteredAudits,
+        });
     }
     catch (err) {
-        return res.status(500).json({ error: err.message });
+        console.error("audit/filtered error:", err);
+        return res.status(500).json({
+            error: "internal error",
+            details: err?.message,
+        });
     }
 });
 app.post("/audit/analysis", async (req, res) => {
