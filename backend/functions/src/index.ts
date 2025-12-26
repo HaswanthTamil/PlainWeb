@@ -709,7 +709,7 @@ app.use(express.json());
 
 app.get("/", (_req, res) => res.json({ ok: true, service: "plainweb-audit-service" }));
 
-app.post("/audit", async (req, res) => {
+app.post("/audit/raw", async (req, res) => {
   try {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: "missing url parameter" });
@@ -800,6 +800,7 @@ app.post("/audit", async (req, res) => {
   }
 });
 
+
 // GET endpoints for fetching parts of the report
 app.post("/audit/filtered", async (req, res) => {
   try {
@@ -815,7 +816,15 @@ app.post("/audit/filtered", async (req, res) => {
     const filteredAudits: Record<string, any> = {};
     for (const [key, audit] of Object.entries(lhr.audits)) {
       if ((audit as any).score === 0) {
-        filteredAudits[key] = audit;
+        const auditCopy = JSON.parse(JSON.stringify(audit));
+        
+        // Prune unwanted fields
+        delete auditCopy.debugData;
+        if (auditCopy.details) {
+          delete auditCopy.details.items;
+        }
+        
+        filteredAudits[key] = auditCopy;
       }
     }
 

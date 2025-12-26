@@ -665,7 +665,7 @@ const app = (0, express_1.default)();
 app.use((0, cors_1.default)({ origin: true }));
 app.use(express_1.default.json());
 app.get("/", (_req, res) => res.json({ ok: true, service: "plainweb-audit-service" }));
-app.post("/audit", async (req, res) => {
+app.post("/audit/raw", async (req, res) => {
     try {
         const { url } = req.body;
         if (!url)
@@ -763,7 +763,13 @@ app.post("/audit/filtered", async (req, res) => {
         const filteredAudits = {};
         for (const [key, audit] of Object.entries(lhr.audits)) {
             if (audit.score === 0) {
-                filteredAudits[key] = audit;
+                const auditCopy = JSON.parse(JSON.stringify(audit));
+                // Prune unwanted fields
+                delete auditCopy.debugData;
+                if (auditCopy.details) {
+                    delete auditCopy.details.items;
+                }
+                filteredAudits[key] = auditCopy;
             }
         }
         return res.json({ audits: filteredAudits });
