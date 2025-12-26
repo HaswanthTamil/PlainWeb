@@ -1,0 +1,16 @@
+[debug] [2025-12-26T18:59:58.164Z] ----------------------------------------------------------------------
+[debug] [2025-12-26T18:59:58.167Z] Command:       D:\Node\node.exe D:\npm-global\node_modules\firebase-tools\lib\bin\firebase.js deploy --only functions
+[debug] [2025-12-26T18:59:58.167Z] CLI Version:   15.1.0
+[debug] [2025-12-26T18:59:58.167Z] Platform:      win32
+[debug] [2025-12-26T18:59:58.167Z] Node Version:  v22.17.1
+[debug] [2025-12-26T18:59:58.167Z] Time:          Sat Dec 27 2025 00:29:58 GMT+0530 (India Standard Time)
+[debug] [2025-12-26T18:59:58.167Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2025-12-26T19:00:00.647Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2025-12-26T19:00:00.647Z] > authorizing via signed-in user (haswanthkumar278@gmail.com)
+[debug] [2025-12-26T19:00:00.647Z] [iam] checking project october-november-dreampi for permissions ["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]
+[debug] [2025-12-26T19:00:00.648Z] Checked if tokens are valid: true, expires at: 1766777310089
+[debug] [2025-12-26T19:00:00.649Z] Checked if tokens are valid: true, expires at: 1766777310089
+[debug] [2025-12-26T19:00:00.650Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/october-november-dreampi:testIamPermissions [none]
+[debug] [2025-12-26T19:00:00.650Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/october-november-dreampi:testIamPermissions x-goog-quota-user=projects/october-november-dreampi
+[debug] [2025-12-26T19:00:00.650Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/october-november-dreampi:testIamPermissions {"permissions":["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]}

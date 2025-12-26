@@ -46,7 +46,8 @@ const generative_ai_1 = require("@google/generative-ai");
 const crypto = __importStar(require("crypto"));
 const cors_1 = __importDefault(require("cors"));
 admin.initializeApp();
-const db = (0, firestore_1.getFirestore)("lighthouse");
+console.log(`Firestore Emulator Host: ${process.env.FIRESTORE_EMULATOR_HOST}`);
+const db = (0, firestore_1.getFirestore)();
 db.settings({
     ignoreUndefinedProperties: true,
     ...(process.env.FIRESTORE_EMULATOR_HOST ? {
@@ -54,6 +55,7 @@ db.settings({
         ssl: false,
     } : {}),
 });
+console.log(`Firestore initialized. Settings:`, db.settings);
 // Initialize Gemini
 const genAI = new generative_ai_1.GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
@@ -756,15 +758,19 @@ app.post("/audit/raw", async (req, res) => {
             expertFixGuide,
             categorizedAudits: pruneEmpty(categorizedAudits),
         };
+        console.log(`Saving report to Firestore with docId: ${docId}`);
         try {
             await docRef.set({
                 report: reportToStore,
                 url: normalized,
                 cachedAt: firestore_1.FieldValue.serverTimestamp(),
             });
+            console.log(`Successfully saved report for ${url}`);
         }
         catch (dbErr) {
             console.error(`Error saving to Firestore: ${dbErr.message}`);
+            // We still return the JSON since the audit was successful, 
+            // but the user should know about the DB failure in logs.
         }
         return res.json(reportToStore);
     }
