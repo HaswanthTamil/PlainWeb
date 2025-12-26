@@ -47,9 +47,13 @@ const crypto = __importStar(require("crypto"));
 const cors_1 = __importDefault(require("cors"));
 admin.initializeApp();
 const db = admin.firestore();
-if (process.env.FIRESTORE_EMULATOR_HOST) {
-    db.settings({ host: process.env.FIRESTORE_EMULATOR_HOST, ssl: false });
-}
+db.settings({
+    ignoreUndefinedProperties: true,
+    ...(process.env.FIRESTORE_EMULATOR_HOST ? {
+        host: process.env.FIRESTORE_EMULATOR_HOST,
+        ssl: false,
+    } : {}),
+});
 // Initialize Gemini
 const genAI = new generative_ai_1.GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
@@ -409,6 +413,101 @@ function extractFailedAccessibilityAudits(lhr) {
     }
     return failedAudits;
 }
+function categorizeAudits(lhr) {
+    const accessibilityCategory = lhr.categories?.accessibility;
+    if (!accessibilityCategory || !accessibilityCategory.auditRefs) {
+        return { failedIssues: [], passedChecks: [], manualChecks: [] };
+    }
+    const failedIssues = [];
+    const passedChecks = [];
+    const manualChecks = [];
+    for (const auditRef of accessibilityCategory.auditRefs) {
+        const auditId = auditRef.id;
+        const audit = lhr.audits?.[auditId];
+        if (!audit)
+            continue;
+        const simplifiedAudit = {
+            id: auditId,
+            title: audit.title,
+            description: audit.description,
+            score: audit.score,
+            scoreDisplayMode: audit.scoreDisplayMode,
+            details: audit.details,
+        };
+        if (simplifiedAudit.details && simplifiedAudit.details.items) {
+            simplifiedAudit.details.items = simplifyItems(simplifiedAudit.details.items);
+        }
+        if (audit.scoreDisplayMode === "manual") {
+            manualChecks.push(simplifiedAudit);
+        }
+        else if (audit.score === 1) {
+            passedChecks.push(simplifiedAudit);
+        }
+        else if (audit.score !== null &&
+            audit.score < 1 &&
+            audit.scoreDisplayMode !== "notApplicable" &&
+            audit.scoreDisplayMode !== "informative") {
+            failedIssues.push(simplifiedAudit);
+        }
+    }
+    return { failedIssues, passedChecks, manualChecks };
+}
+function flattenAuditsToText(categorized) {
+    let text = "ACCESSIBILITY AUDIT REPORT\n========================\n\n";
+    if (categorized.failedIssues.length > 0) {
+        text += "FAILED ISSUES:\n";
+        categorized.failedIssues.forEach((issue, idx) => {
+            text += `${idx + 1}. [${issue.id}] ${issue.title}\n`;
+            text += `   Description: ${issue.description}\n`;
+            if (issue.details?.items?.length > 0) {
+                text += `   Affected Elements:\n`;
+                issue.details.items.forEach((item) => {
+                    text += `     - Node: ${item.node}\n`;
+                    if (item.selector)
+                        text += `       Selector: ${item.selector}\n`;
+                    if (item.explanation)
+                        text += `       Note: ${item.explanation}\n`;
+                });
+            }
+            text += "\n";
+        });
+    }
+    if (categorized.manualChecks.length > 0) {
+        text += "MANUAL CHECKS REQUIRED:\n";
+        categorized.manualChecks.forEach((check, idx) => {
+            text += `${idx + 1}. [${check.id}] ${check.title}\n`;
+            text += `   Description: ${check.description}\n\n`;
+        });
+    }
+    return text;
+}
+async function generateExpertFixGuide(flattenedText) {
+    if (!process.env.GEMINI_API_KEY)
+        return null;
+    const prompt = `You are a Senior Accessibility Engineer. I will provide you with a flattened Lighthouse Accessibility report.
+Your task is to provide a "Developer's Expert Fix Guide".
+
+Rules:
+1. Group issues by common themes (e.g., Semantic HTML, Colors, ARIA).
+2. For each group, provides specific, technical instructions on HOW to fix the issues.
+3. Provide code snippets (HTML/CSS) where appropriate.
+4. Keep it highly actionable and professional.
+5. Focus ONLY on the failed issues and manual checks provided.
+6. Use Markdown formatting.
+
+AUDIT DATA:
+${flattenedText}
+
+GENERATE THE GUIDE:`;
+    try {
+        const result = await model.generateContent(prompt);
+        return result.response.text().trim();
+    }
+    catch (e) {
+        console.error("Gemini Guide Generation failed", e);
+        return "Expert guide generation temporarily unavailable.";
+    }
+}
 function enrichAccessibilityAudits(failedAudits) {
     const issues = [];
     for (const audit of failedAudits) {
@@ -598,6 +697,10 @@ app.post("/audit", async (req, res) => {
         const accessibilityIssues = enrichAccessibilityAudits(failedAccessibilityAudits);
         const fixBuckets = groupIssuesIntoFixBuckets(failedAccessibilityAudits);
         const accessibilityAnalysis = generateAccessibilityAnalysisPrompt(fixBuckets.buckets);
+        const categorizedAudits = categorizeAudits(lhr);
+        // Flatten audits and generate expert guide
+        const flattenedAudits = flattenAuditsToText(categorizedAudits);
+        const expertFixGuide = await generateExpertFixGuide(flattenedAudits);
         // Cleanup LHR further
         removeDescriptions(lhr);
         const prunedLhr = pruneEmpty(lhr);
@@ -629,6 +732,8 @@ app.post("/audit", async (req, res) => {
             fixBuckets,
             accessibilityAnalysis,
             ownerSummary,
+            expertFixGuide,
+            categorizedAudits: pruneEmpty(categorizedAudits),
         };
         await docRef.set({
             report: reportToStore,
@@ -643,54 +748,33 @@ app.post("/audit", async (req, res) => {
     }
 });
 // GET endpoints for fetching parts of the report
-app.get("/audit/filtered", async (req, res) => {
+app.post("/audit/filtered", async (req, res) => {
     try {
-        const url = req.query.url;
+        const { url } = req.body;
         if (!url)
             return res.status(400).json({ error: "missing url" });
         const docId = crypto.createHash("sha256").update(url).digest("hex");
         const doc = await db.collection("audits").doc(docId).get();
         if (!doc.exists)
             return res.status(404).json({ error: "not found" });
-        return res.json({ lhr: doc.data()?.report?.lhr || null });
+        const lhr = doc.data()?.report?.lhr;
+        if (!lhr || !lhr.audits)
+            return res.json({ audits: {} });
+        const filteredAudits = {};
+        for (const [key, audit] of Object.entries(lhr.audits)) {
+            if (audit.score === 0) {
+                filteredAudits[key] = audit;
+            }
+        }
+        return res.json({ audits: filteredAudits });
     }
     catch (err) {
         return res.status(500).json({ error: err.message });
     }
 });
-app.get("/audit/issues", async (req, res) => {
+app.post("/audit/analysis", async (req, res) => {
     try {
-        const url = req.query.url;
-        if (!url)
-            return res.status(400).json({ error: "missing url" });
-        const docId = crypto.createHash("sha256").update(url).digest("hex");
-        const doc = await db.collection("audits").doc(docId).get();
-        if (!doc.exists)
-            return res.status(404).json({ error: "not found" });
-        return res.json(doc.data()?.report?.accessibilityIssues || { issues: [] });
-    }
-    catch (err) {
-        return res.status(500).json({ error: err.message });
-    }
-});
-app.get("/audit/buckets", async (req, res) => {
-    try {
-        const url = req.query.url;
-        if (!url)
-            return res.status(400).json({ error: "missing url" });
-        const docId = crypto.createHash("sha256").update(url).digest("hex");
-        const doc = await db.collection("audits").doc(docId).get();
-        if (!doc.exists)
-            return res.status(404).json({ error: "not found" });
-        return res.json(doc.data()?.report?.fixBuckets || { buckets: [] });
-    }
-    catch (err) {
-        return res.status(500).json({ error: err.message });
-    }
-});
-app.get("/audit/analysis", async (req, res) => {
-    try {
-        const url = req.query.url;
+        const { url } = req.body;
         if (!url)
             return res.status(400).json({ error: "missing url" });
         const docId = crypto.createHash("sha256").update(url).digest("hex");
@@ -703,9 +787,9 @@ app.get("/audit/analysis", async (req, res) => {
         return res.status(500).json({ error: err.message });
     }
 });
-app.get("/audit/summary", async (req, res) => {
+app.post("/audit/summary", async (req, res) => {
     try {
-        const url = req.query.url;
+        const { url } = req.body;
         if (!url)
             return res.status(400).json({ error: "missing url" });
         const docId = crypto.createHash("sha256").update(url).digest("hex");
