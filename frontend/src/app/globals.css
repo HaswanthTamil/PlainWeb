@@ -188,8 +188,8 @@ body {
 /* Glassmorphism Utilities */
 .glass {
   background: rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.18);
 }
 
@@ -204,15 +204,15 @@ body {
   background-size: 40px 40px;
   background-image: linear-gradient(to right, var(--border) 1px, transparent 1px),
     linear-gradient(to bottom, var(--border) 1px, transparent 1px);
-  mask-image: radial-gradient(ellipse at center, black 40%, transparent 70%);
   -webkit-mask-image: radial-gradient(ellipse at center, black 40%, transparent 70%);
+  mask-image: radial-gradient(ellipse at center, black 40%, transparent 70%);
 }
 
 .bg-dots {
   background-image: radial-gradient(var(--muted-foreground) 1px, transparent 1px);
   background-size: 24px 24px;
-  mask-image: radial-gradient(ellipse at top, black, transparent 70%);
   -webkit-mask-image: radial-gradient(ellipse at top, black, transparent 70%);
+  mask-image: radial-gradient(ellipse at top, black, transparent 70%);
 }
 
 /* Custom Scrollbar */

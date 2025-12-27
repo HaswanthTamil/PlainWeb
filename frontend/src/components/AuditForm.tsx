@@ -27,12 +27,12 @@ export default function AuditForm({ onAuditStart, onAuditComplete, onError }: Au
                 fetch(`${API_BASE_URL}/audit/summary`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ url }),
+                    body: JSON.stringify({ "url": url }),
                 }),
                 fetch(`${API_BASE_URL}/audit/analysis`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ url }),
+                    body: JSON.stringify({ "url": url }),
                 })
             ]);
 
@@ -41,6 +41,14 @@ export default function AuditForm({ onAuditStart, onAuditComplete, onError }: Au
 
             const clientData = await clientResponse.json();
             const devData = await devResponse.json();
+
+            console.log(clientData);
+            console.log(devData);
+
+            // Normalize response format
+            if (clientData.summaryText && !clientData.summary) {
+                clientData.summary = clientData.summaryText;
+            }
 
             onAuditComplete({
                 client: clientData,
