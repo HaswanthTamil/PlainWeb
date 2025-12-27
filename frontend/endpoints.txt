@@ -12,3 +12,10 @@ POST /audit/filtered
 POST /audit/analysis
 - Returns a human-readable accessibility assessment.
 - Request Body: { "url": "https://example.com" }
+
+
+POST /audit/summary
+- Returns a summary of the accessibility audit.
+- Request Body: { "url": "https://example.com" }
+
+base url dev: http://localhost:5001/october-november-dreampi/us-central1/api
