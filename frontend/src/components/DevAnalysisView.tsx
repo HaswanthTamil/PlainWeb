@@ -65,7 +65,7 @@ export default function DevAnalysisView({ data }: { data: any }) {
             </div>
 
             {/* Log Content */}
-            <div className="p-4 overflow-auto min-h-[500px] max-h-[800px] scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
+            <div className="p-4 overflow-auto min-h-[300px] max-h-[600px] scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
                 <div className="relative">
                     {lines.map((line: string, index: number) => (
                         <div

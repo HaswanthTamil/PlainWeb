@@ -217,46 +217,16 @@ export default function AuditResults({ data }: AuditResultsProps) {
 
                         {/* Summary */}
                         {client.summary && (
-                            <motion.div variants={itemVariants} className="bg-primary/5 border border-primary/10 p-6 rounded-2xl">
-                                <h3 className="flex items-center gap-2 text-lg font-semibold text-primary mb-3">
-                                    <CheckCircle2 size={20} />
+                            <motion.div variants={itemVariants} className="bg-primary/5 border border-primary/10 p-8 sm:p-10 rounded-2xl min-h-[240px] flex flex-col justify-center gap-4">
+                                <h3 className="flex items-center gap-3 text-xl font-semibold text-primary">
+                                    <CheckCircle2 size={24} />
                                     Executive Summary
                                 </h3>
-                                <p className="text-foreground/80 leading-relaxed">{client.summary}</p>
+                                <p className="text-lg text-foreground/90 leading-loose">{client.summary}</p>
                             </motion.div>
                         )}
 
-                        {/* Issues Grid */}
-                        {client.issues && client.issues.length > 0 && (
-                            <motion.div variants={itemVariants} className="space-y-4">
-                                <h3 className="text-lg font-semibold flex items-center gap-2">
-                                    <AlertCircle size={20} className="text-orange-500" />
-                                    Key Findings
-                                </h3>
-                                <div className="grid gap-4 md:grid-cols-2">
-                                    {client.issues.map((issue: any, index: number) => (
-                                        <div
-                                            key={index}
-                                            className={`bg-card dark:bg-slate-900/50 p-5 rounded-2xl border border-border shadow-sm ${index === client.issues.length - 1 && client.issues.length % 2 !== 0 ? "md:col-span-2" : ""
-                                                }`}
-                                        >
-                                            <div className="flex justify-between items-start gap-4 mb-2">
-                                                <div className="flex items-center gap-2.5">
-                                                    <div className="w-1.5 h-1.5 rounded-full bg-orange-500" />
-                                                    <h4 className="font-semibold text-foreground">{issue.title || "Potential Issue"}</h4>
-                                                </div>
-                                                {issue.displayValue && (
-                                                    <span className="text-xs font-mono px-2.5 py-1 bg-secondary rounded-lg text-secondary-foreground whitespace-nowrap border border-transparent">
-                                                        {issue.displayValue}
-                                                    </span>
-                                                )}
-                                            </div>
-                                            <p className="text-sm text-muted-foreground pl-4 leading-relaxed">{issue.description}</p>
-                                        </div>
-                                    ))}
-                                </div>
-                            </motion.div>
-                        )}
+
                     </motion.div>
                 )}
 
