@@ -341,328 +341,6 @@ async function runLighthouse(url) {
     }
     return runnerResult.lhr;
 }
-function pruneEmpty(obj) {
-    if (obj === null || obj === undefined || obj === "")
-        return undefined;
-    if (Array.isArray(obj)) {
-        const result = obj.map(pruneEmpty).filter((v) => v !== undefined);
-        return result.length > 0 ? result : undefined;
-    }
-    if (typeof obj === "object") {
-        const result = {};
-        for (const key in obj) {
-            const val = pruneEmpty(obj[key]);
-            if (val !== undefined) {
-                result[key] = val;
-            }
-        }
-        return Object.keys(result).length > 0 ? result : undefined;
-    }
-    return obj;
-}
-function removeDescriptions(obj) {
-    if (!obj || typeof obj !== "object")
-        return;
-    if (Array.isArray(obj)) {
-        for (const item of obj)
-            removeDescriptions(item);
-        return;
-    }
-    for (const key of Object.keys(obj)) {
-        if (key === "description") {
-            delete obj[key];
-            continue;
-        }
-        const val = obj[key];
-        if (typeof val === "object" && val !== null)
-            removeDescriptions(val);
-    }
-}
-function simplifyItems(items, limit = 5) {
-    if (!Array.isArray(items))
-        return [];
-    return items.slice(0, limit).map((item) => ({
-        node: item.node?.nodeLabel || "unknown",
-        selector: item.node?.selector || null,
-        explanation: item.explanation || item.failureReason || null,
-    }));
-}
-function extractFailedAccessibilityAudits(lhr) {
-    const accessibilityCategory = lhr.categories?.accessibility;
-    if (!accessibilityCategory || !accessibilityCategory.auditRefs) {
-        return [];
-    }
-    const failedAudits = [];
-    for (const auditRef of accessibilityCategory.auditRefs) {
-        const auditId = auditRef.id;
-        const audit = lhr.audits?.[auditId];
-        if (!audit)
-            continue;
-        if (audit.score === 1 || audit.score === null)
-            continue;
-        if (["notApplicable", "manual", "informative"].includes(audit.scoreDisplayMode))
-            continue;
-        let failCount = 0;
-        if (audit.details && audit.details.items) {
-            failCount = Array.isArray(audit.details.items) ? audit.details.items.length : 0;
-            // Simplify items while we're at it
-            audit.details.items = simplifyItems(audit.details.items);
-        }
-        failedAudits.push({
-            auditId,
-            failCount,
-            title: audit.title || auditId,
-        });
-    }
-    return failedAudits;
-}
-function categorizeAudits(lhr) {
-    const accessibilityCategory = lhr.categories?.accessibility;
-    if (!accessibilityCategory || !accessibilityCategory.auditRefs) {
-        return { failedIssues: [], passedChecks: [], manualChecks: [] };
-    }
-    const failedIssues = [];
-    const passedChecks = [];
-    const manualChecks = [];
-    for (const auditRef of accessibilityCategory.auditRefs) {
-        const auditId = auditRef.id;
-        const audit = lhr.audits?.[auditId];
-        if (!audit)
-            continue;
-        const simplifiedAudit = {
-            id: auditId,
-            title: audit.title,
-            description: audit.description,
-            score: audit.score,
-            scoreDisplayMode: audit.scoreDisplayMode,
-            details: audit.details,
-        };
-        if (simplifiedAudit.details && simplifiedAudit.details.items) {
-            simplifiedAudit.details.items = simplifyItems(simplifiedAudit.details.items);
-        }
-        if (audit.scoreDisplayMode === "manual") {
-            manualChecks.push(simplifiedAudit);
-        }
-        else if (audit.score === 1) {
-            passedChecks.push(simplifiedAudit);
-        }
-        else if (audit.score !== null &&
-            audit.score < 1 &&
-            audit.scoreDisplayMode !== "notApplicable" &&
-            audit.scoreDisplayMode !== "informative") {
-            failedIssues.push(simplifiedAudit);
-        }
-    }
-    return { failedIssues, passedChecks, manualChecks };
-}
-function flattenAuditsToText(categorized) {
-    let text = "ACCESSIBILITY AUDIT REPORT\n========================\n\n";
-    if (categorized.failedIssues.length > 0) {
-        text += "FAILED ISSUES:\n";
-        categorized.failedIssues.forEach((issue, idx) => {
-            text += `${idx + 1}. [${issue.id}] ${issue.title}\n`;
-            text += `   Description: ${issue.description}\n`;
-            if (issue.details?.items?.length > 0) {
-                text += `   Affected Elements:\n`;
-                issue.details.items.forEach((item) => {
-                    text += `     - Node: ${item.node}\n`;
-                    if (item.selector)
-                        text += `       Selector: ${item.selector}\n`;
-                    if (item.explanation)
-                        text += `       Note: ${item.explanation}\n`;
-                });
-            }
-            text += "\n";
-        });
-    }
-    if (categorized.manualChecks.length > 0) {
-        text += "MANUAL CHECKS REQUIRED:\n";
-        categorized.manualChecks.forEach((check, idx) => {
-            text += `${idx + 1}. [${check.id}] ${check.title}\n`;
-            text += `   Description: ${check.description}\n\n`;
-        });
-    }
-    return text;
-}
-async function generateExpertFixGuide(flattenedText) {
-    if (!process.env.GEMINI_API_KEY)
-        return null;
-    const prompt = `You are a Senior Accessibility Engineer. I will provide you with a flattened Lighthouse Accessibility report.
-Your task is to provide a "Developer's Expert Fix Guide".
-
-Rules:
-1. Group issues by common themes (e.g., Semantic HTML, Colors, ARIA).
-2. For each group, provides specific, technical instructions on HOW to fix the issues.
-3. Provide code snippets (HTML/CSS) where appropriate.
-4. Keep it highly actionable and professional.
-5. Focus ONLY on the failed issues and manual checks provided.
-6. Use Markdown formatting.
-
-AUDIT DATA:
-${flattenedText}
-
-GENERATE THE GUIDE:`;
-    try {
-        const result = await model.generateContent(prompt);
-        return result.response.text().trim();
-    }
-    catch (e) {
-        console.error("Gemini Guide Generation failed", e);
-        return "Expert guide generation temporarily unavailable.";
-    }
-}
-function enrichAccessibilityAudits(failedAudits) {
-    const issues = [];
-    for (const audit of failedAudits) {
-        const ruleData = ACCESSIBILITY_RULE_MAP[audit.auditId];
-        if (ruleData) {
-            issues.push({
-                rule: audit.title,
-                wcag: ruleData.wcag,
-                severity: ruleData.severity,
-                failedElements: audit.failCount,
-                impact: ruleData.impact,
-                autoFixPotential: ruleData.autoFixPotential,
-            });
-        }
-        else {
-            issues.push({
-                rule: audit.title,
-                wcag: "Not mapped",
-                severity: "moderate",
-                failedElements: audit.failCount,
-                impact: "This accessibility issue may affect some users",
-                autoFixPotential: "medium",
-            });
-        }
-    }
-    return { issues };
-}
-function groupIssuesIntoFixBuckets(failedAudits) {
-    const bucketMap = new Map();
-    const severityRank = {
-        critical: 4, serious: 3, moderate: 2, minor: 1,
-    };
-    for (const audit of failedAudits) {
-        const bucketName = FIX_BUCKET_MAP[audit.auditId] || "Other accessibility issues";
-        const ruleData = ACCESSIBILITY_RULE_MAP[audit.auditId];
-        if (!bucketMap.has(bucketName)) {
-            bucketMap.set(bucketName, {
-                rules: [], failures: 0, severities: [], autoFixPotentials: [],
-            });
-        }
-        const bucket = bucketMap.get(bucketName);
-        bucket.rules.push(audit.title);
-        bucket.failures += audit.failCount;
-        if (ruleData) {
-            bucket.severities.push(ruleData.severity);
-            bucket.autoFixPotentials.push(ruleData.autoFixPotential);
-        }
-        else {
-            bucket.severities.push("moderate");
-            bucket.autoFixPotentials.push("medium");
-        }
-    }
-    const buckets = [];
-    for (const [bucketName, data] of bucketMap.entries()) {
-        let highestSeverity = "minor";
-        let highestRank = 0;
-        for (const severity of data.severities) {
-            const rank = severityRank[severity] || 0;
-            if (rank > highestRank) {
-                highestRank = rank;
-                highestSeverity = severity;
-            }
-        }
-        let autoFixable = "no";
-        const highCount = data.autoFixPotentials.filter(p => p === "high").length;
-        const mediumCount = data.autoFixPotentials.filter(p => p === "medium").length;
-        const total = data.autoFixPotentials.length;
-        if (highCount === total)
-            autoFixable = "yes";
-        else if (highCount > 0 || mediumCount > 0)
-            autoFixable = "partial";
-        buckets.push({
-            bucketName,
-            relatedRules: data.rules,
-            totalFailures: data.failures,
-            highestSeverity,
-            autoFixable,
-        });
-    }
-    buckets.sort((a, b) => {
-        const severityDiff = severityRank[b.highestSeverity] - severityRank[a.highestSeverity];
-        if (severityDiff !== 0)
-            return severityDiff;
-        return b.totalFailures - a.totalFailures;
-    });
-    return { buckets };
-}
-function getUserImpactForBucket(bucketName) {
-    const impactMap = {
-        "Add alt attributes to images": "Screen reader users cannot understand images or complete image-based actions",
-        "Add labels to form elements": "Screen reader users cannot identify or fill out form fields",
-        "Add accessible names to interactive elements": "Screen reader users cannot identify buttons, links, or controls",
-        "Fix ARIA attributes and values": "Assistive technology receives incorrect information about page elements",
-        "Fix ARIA structure and relationships": "Screen readers announce confusing or broken page structure",
-        "Fix document structure and semantics": "Screen reader navigation becomes difficult or impossible",
-        "Fix table accessibility": "Screen reader users cannot understand data table relationships",
-        "Add or fix page metadata": "Users cannot identify pages, understand language, or zoom text",
-        "Fix color contrast": "Users with low vision cannot read text",
-        "Fix keyboard navigation": "Keyboard-only users get trapped or cannot navigate efficiently",
-        "Fix duplicate IDs": "Assistive technology behaves unpredictably",
-        "Add captions to multimedia": "Deaf and hard-of-hearing users cannot access video content",
-    };
-    return impactMap[bucketName] || "Users with disabilities may struggle to access this content";
-}
-function generateAccessibilityAnalysisPrompt(buckets) {
-    if (buckets.length === 0) {
-        return "Great news! No significant accessibility issues were detected on this page.";
-    }
-    const criticalCount = buckets.filter(b => b.highestSeverity === "critical").length;
-    const seriousCount = buckets.filter(b => b.highestSeverity === "serious").length;
-    const totalIssues = buckets.reduce((sum, b) => sum + b.totalFailures, 0);
-    let riskLevel = "low";
-    let riskDescription = "minor accessibility barriers";
-    if (criticalCount > 0) {
-        riskLevel = "high";
-        riskDescription = "critical accessibility barriers that block users from accessing content";
-    }
-    else if (seriousCount >= 3) {
-        riskLevel = "high";
-        riskDescription = "multiple serious accessibility issues";
-    }
-    else if (seriousCount > 0) {
-        riskLevel = "moderate";
-        riskDescription = "significant accessibility gaps";
-    }
-    const top3 = buckets.slice(0, 3);
-    let prompt = `## Accessibility Assessment\n\n`;
-    prompt += `**Overall Risk**: ${riskLevel.toUpperCase()} — This page has ${riskDescription}. `;
-    prompt += `Found ${totalIssues} accessibility ${totalIssues === 1 ? 'issue' : 'issues'} across ${buckets.length} ${buckets.length === 1 ? 'category' : 'categories'}.\n\n`;
-    prompt += `### Top 3 Fix Priorities\n\n`;
-    top3.forEach((bucket, index) => {
-        prompt += `**${index + 1}. ${bucket.bucketName}**\n`;
-        prompt += `- ${bucket.totalFailures} ${bucket.totalFailures === 1 ? 'element' : 'elements'} affected\n`;
-        prompt += `- Impact: ${getUserImpactForBucket(bucket.bucketName)}\n`;
-        if (bucket.autoFixable === "yes") {
-            prompt += `- Can be automated: Yes — A browser extension could fix these automatically\n`;
-        }
-        else if (bucket.autoFixable === "partial") {
-            prompt += `- Can be automated: Partially — Some fixes need human judgment\n`;
-        }
-        else {
-            prompt += `- Can be automated: No — Requires manual design or content decisions\n`;
-        }
-        prompt += `\n`;
-    });
-    prompt += `### What Matters to Real Users\n\n`;
-    if (criticalCount > 0) {
-        prompt += `These critical issues prevent certain users from accessing your content at all. `;
-    }
-    prompt += `Every accessibility barrier you remove helps millions of users with disabilities.\n\n`;
-    return prompt.trim();
-}
 // Express App
 const app = (0, express_1.default)();
 app.use((0, cors_1.default)({ origin: true }));
@@ -685,97 +363,6 @@ function getDocId(url) {
     const normalized = normalizeUrl(url);
     return crypto.createHash("sha256").update(normalized).digest("hex");
 }
-function deepRemoveKeys(obj, keysToRemove) {
-    if (!obj || typeof obj !== "object")
-        return;
-    for (const key of Object.keys(obj)) {
-        if (keysToRemove.includes(key)) {
-            delete obj[key];
-        }
-        else {
-            deepRemoveKeys(obj[key], keysToRemove);
-        }
-    }
-}
-// app.post("/audit/raw", async (req, res) => {
-//   try {
-//     const { url } = req.body;
-//     if (!url) return res.status(400).json({ error: "missing url parameter" });
-//     const normalized = normalizeUrl(url);
-//     const docId = getDocId(normalized);
-//     const docRef = db.collection("audits").doc(docId);
-//     // Run Lighthouse
-//     console.log(`Running Lighthouse for ${url}...`);
-//     const lhr = await runLighthouse(url);
-//     // Initial Processing
-//     delete (lhr as any).i18n;
-//     delete (lhr as any).categoryGroups;
-//     delete (lhr as any).entities;
-//     delete (lhr as any).timing;
-//     if ((lhr as any).fullPageScreenshot) delete (lhr as any).fullPageScreenshot;
-//     // Remove performance if only accessibility was requested (though we forced it in runLighthouse)
-//     if (lhr.categories && (lhr.categories as any).performance) {
-//       delete (lhr.categories as any).performance;
-//     }
-//     const failedAccessibilityAudits = extractFailedAccessibilityAudits(lhr);
-//     const accessibilityIssues = enrichAccessibilityAudits(failedAccessibilityAudits);
-//     const fixBuckets = groupIssuesIntoFixBuckets(failedAccessibilityAudits);
-//     const accessibilityAnalysis = generateAccessibilityAnalysisPrompt(fixBuckets.buckets);
-//     const categorizedAudits = categorizeAudits(lhr);
-//     // Flatten audits and generate expert guide
-//     const flattenedAudits = flattenAuditsToText(categorizedAudits);
-//     const expertFixGuide = await generateExpertFixGuide(flattenedAudits);
-//     // Cleanup LHR further
-//     removeDescriptions(lhr);
-//     const prunedLhr = pruneEmpty(lhr);
-//     // Generate Owner Summary with Gemini
-//     let ownerSummary = "Your website is being analyzed for accessibility.";
-//     if (process.env.GEMINI_API_KEY && fixBuckets.buckets.length > 0) {
-//       try {
-//         const bucketSummary = fixBuckets.buckets
-//           .slice(0, 3)
-//           .map(b => `${b.bucketName}: ${b.totalFailures} issues`)
-//           .join(", ");
-//         const prompt = `You are explaining website accessibility issues to a non-technical website owner.
-//         Issues found: ${bucketSummary}
-//         Write a friendly, reassuring explanation in simple language. Max 120 words. Focus on why it matters and that it's fixable. No technical terms or WCAG references.`;
-//         const result = await model.generateContent(prompt);
-//         ownerSummary = result.response.text().trim();
-//       } catch (e) {
-//         console.error("Gemini failed", e);
-//         ownerSummary = "We found some accessibility issues that could make it harder for some visitors to use. These are common and fixable!";
-//       }
-//     } else if (fixBuckets.buckets.length === 0) {
-//       ownerSummary = "Great news! Your website passed our accessibility checks.";
-//     }
-//     const reportToStore = {
-//       lhr: JSON.parse(JSON.stringify(prunedLhr)),
-//       accessibilityIssues,
-//       fixBuckets,
-//       accessibilityAnalysis,
-//       ownerSummary,
-//       expertFixGuide,
-//       categorizedAudits: pruneEmpty(categorizedAudits),
-//     };
-//     console.log(`Saving report to Firestore with docId: ${docId}`);
-//     try {
-//       await docRef.set({
-//         report: reportToStore,
-//         url: normalized,
-//         cachedAt: FieldValue.serverTimestamp(),
-//       });
-//       console.log(`Successfully saved report for ${url}`);
-//     } catch (dbErr: any) {
-//       console.error(`Error saving to Firestore: ${dbErr.message}`);
-//       // We still return the JSON since the audit was successful, 
-//       // but the user should know about the DB failure in logs.
-//     }
-//     return res.json(reportToStore);
-//   } catch (err: any) {
-//     console.error("Audit error:", err);
-//     return res.status(500).json({ error: "internal error", details: err.message });
-//   }
-// });
 app.post("/audit/raw", async (req, res) => {
     try {
         const { url } = req.body;
@@ -944,11 +531,12 @@ app.post("/audit/summary", async (req, res) => {
             return res.status(400).json({ error: "missing url" });
         const normalizedUrl = normalizeUrl(url);
         const docId = getDocId(normalizedUrl);
-        let doc = await db.collection("audits").doc(docId).get();
+        const docRef = db.collection("audits").doc(docId);
+        let doc = await docRef.get();
         let ownerSummary = doc.data()?.report?.ownerSummary;
-        // If no ownerSummary, regenerate audits using /audit/filtered logic
-        if (!ownerSummary) {
-            // Run Lighthouse and filter accessibility audits (same logic as /audit/filtered)
+        let score = doc.data()?.score ?? null;
+        // ---------- Regenerate if missing ----------
+        if (!ownerSummary || score === null) {
             const lhr = await runLighthouse(url);
             const accessibilityAuditIds = new Set(lhr.categories.accessibility.auditRefs.map((ref) => ref.id));
             const filteredAudits = {};
@@ -962,28 +550,43 @@ app.post("/audit/summary", async (req, res) => {
                     score: audit.score,
                     scoreDisplayMode: audit.scoreDisplayMode,
                     details: audit.details
-                        ? { type: audit.details.type, headings: audit.details.headings ?? [] }
+                        ? {
+                            type: audit.details.type,
+                            headings: audit.details.headings ?? [],
+                        }
                         : undefined,
                 };
             }
-            // Generate a simple summary
+            // ---------- Score ----------
+            score =
+                accessibilityAuditIds.size === 0
+                    ? 100
+                    : Math.round(((accessibilityAuditIds.size -
+                        Object.keys(filteredAudits).length) /
+                        accessibilityAuditIds.size) *
+                        100);
+            // ---------- Owner-friendly summary ----------
             ownerSummary =
                 Object.keys(filteredAudits).length === 0
-                    ? "Great news! Your website passed our accessibility checks."
-                    : `We found ${Object.keys(filteredAudits).length} accessibility issues on your website. These are common and can be fixed easily.`;
-            // Store back in Firestore
-            await db.collection("audits").doc(docId).set({
+                    ? "Great news! Your website passed our accessibility checks and meets common accessibility standards."
+                    : `Your website scored ${score}/100 for accessibility. We found ${Object.keys(filteredAudits).length} issues that may affect users with disabilities. These are common and can be fixed to improve usability for everyone.`;
+            // ---------- Persist ----------
+            await docRef.set({
                 url: normalizedUrl,
+                score,
                 report: {
                     ownerSummary,
                     audits: JSON.stringify(filteredAudits),
                 },
                 status: "completed",
                 timestamp: firestore_1.FieldValue.serverTimestamp(),
-            });
-            doc = await db.collection("audits").doc(docId).get();
+            }, { merge: true });
         }
-        return res.json({ summary: ownerSummary });
+        // ---------- Response ----------
+        return res.json({
+            score,
+            summary: ownerSummary,
+        });
     }
     catch (err) {
         console.error("audit/summary error:", err);
