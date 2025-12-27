@@ -12,6 +12,7 @@
     "start": "npm run build && npm run serve"
   },
   "dependencies": {
+    "@google/genai": "^1.34.0",
     "@google/generative-ai": "^0.24.1",
     "chrome-launcher": "^0.15.2",
     "cors": "^2.8.5",

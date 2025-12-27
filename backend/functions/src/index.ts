@@ -6,6 +6,7 @@ import * as chromeLauncher from "chrome-launcher";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import * as crypto from "crypto";
 import cors from "cors";
+import { GoogleGenAI } from "@google/genai";
 
 admin.initializeApp();
 
@@ -712,16 +713,24 @@ app.use(express.json());
 app.get("/", (_req, res) => res.json({ ok: true, service: "plainweb-audit-service" }));
 
 
-function normalizeUrl(input: string) {
-  try {
-    const u = new URL(input);
-    u.hash = "";
-    // Remove trailing slash and force lowercase for consistency
-    return u.toString().replace(/\/$/, "").toLowerCase();
-  } catch (e) {
-    throw new Error("Invalid URL");
+function normalizeUrl(input: string): string {
+  const url = new URL(input);
+
+  url.protocol = "https:";
+  url.hash = "";
+
+  // Remove tracking params
+  ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"]
+    .forEach(p => url.searchParams.delete(p));
+
+  // Remove trailing slash (except root)
+  if (url.pathname !== "/" && url.pathname.endsWith("/")) {
+    url.pathname = url.pathname.slice(0, -1);
   }
+
+  return url.toString();
 }
+
 
 function getDocId(url: string) {
   const normalized = normalizeUrl(url);
@@ -740,102 +749,147 @@ function deepRemoveKeys(obj: any, keysToRemove: string[]) {
   }
 }
 
+// app.post("/audit/raw", async (req, res) => {
+//   try {
+//     const { url } = req.body;
+//     if (!url) return res.status(400).json({ error: "missing url parameter" });
+
+//     const normalized = normalizeUrl(url);
+//     const docId = getDocId(normalized);
+//     const docRef = db.collection("audits").doc(docId);
+
+//     // Run Lighthouse
+//     console.log(`Running Lighthouse for ${url}...`);
+//     const lhr = await runLighthouse(url);
+
+//     // Initial Processing
+//     delete (lhr as any).i18n;
+//     delete (lhr as any).categoryGroups;
+//     delete (lhr as any).entities;
+//     delete (lhr as any).timing;
+//     if ((lhr as any).fullPageScreenshot) delete (lhr as any).fullPageScreenshot;
+
+//     // Remove performance if only accessibility was requested (though we forced it in runLighthouse)
+//     if (lhr.categories && (lhr.categories as any).performance) {
+//       delete (lhr.categories as any).performance;
+//     }
+
+//     const failedAccessibilityAudits = extractFailedAccessibilityAudits(lhr);
+//     const accessibilityIssues = enrichAccessibilityAudits(failedAccessibilityAudits);
+//     const fixBuckets = groupIssuesIntoFixBuckets(failedAccessibilityAudits);
+//     const accessibilityAnalysis = generateAccessibilityAnalysisPrompt(fixBuckets.buckets);
+//     const categorizedAudits = categorizeAudits(lhr);
+
+//     // Flatten audits and generate expert guide
+//     const flattenedAudits = flattenAuditsToText(categorizedAudits);
+//     const expertFixGuide = await generateExpertFixGuide(flattenedAudits);
+
+//     // Cleanup LHR further
+//     removeDescriptions(lhr);
+//     const prunedLhr = pruneEmpty(lhr);
+
+//     // Generate Owner Summary with Gemini
+//     let ownerSummary = "Your website is being analyzed for accessibility.";
+//     if (process.env.GEMINI_API_KEY && fixBuckets.buckets.length > 0) {
+//       try {
+//         const bucketSummary = fixBuckets.buckets
+//           .slice(0, 3)
+//           .map(b => `${b.bucketName}: ${b.totalFailures} issues`)
+//           .join(", ");
+
+//         const prompt = `You are explaining website accessibility issues to a non-technical website owner.
+//         Issues found: ${bucketSummary}
+//         Write a friendly, reassuring explanation in simple language. Max 120 words. Focus on why it matters and that it's fixable. No technical terms or WCAG references.`;
+
+//         const result = await model.generateContent(prompt);
+//         ownerSummary = result.response.text().trim();
+//       } catch (e) {
+//         console.error("Gemini failed", e);
+//         ownerSummary = "We found some accessibility issues that could make it harder for some visitors to use. These are common and fixable!";
+//       }
+//     } else if (fixBuckets.buckets.length === 0) {
+//       ownerSummary = "Great news! Your website passed our accessibility checks.";
+//     }
+
+//     const reportToStore = {
+//       lhr: JSON.parse(JSON.stringify(prunedLhr)),
+//       accessibilityIssues,
+//       fixBuckets,
+//       accessibilityAnalysis,
+//       ownerSummary,
+//       expertFixGuide,
+//       categorizedAudits: pruneEmpty(categorizedAudits),
+//     };
+
+//     console.log(`Saving report to Firestore with docId: ${docId}`);
+//     try {
+//       await docRef.set({
+//         report: reportToStore,
+//         url: normalized,
+//         cachedAt: FieldValue.serverTimestamp(),
+//       });
+//       console.log(`Successfully saved report for ${url}`);
+//     } catch (dbErr: any) {
+//       console.error(`Error saving to Firestore: ${dbErr.message}`);
+//       // We still return the JSON since the audit was successful, 
+//       // but the user should know about the DB failure in logs.
+//     }
+
+//     return res.json(reportToStore);
+//   } catch (err: any) {
+//     console.error("Audit error:", err);
+//     return res.status(500).json({ error: "internal error", details: err.message });
+//   }
+// });
+
+
 app.post("/audit/raw", async (req, res) => {
   try {
     const { url } = req.body;
-    if (!url) return res.status(400).json({ error: "missing url parameter" });
+    if (!url) {
+      return res.status(400).json({ error: "missing url parameter" });
+    }
 
-    const normalized = normalizeUrl(url);
-    const docId = getDocId(normalized);
-    const docRef = db.collection("audits").doc(docId);
+    console.log(`[audit/raw] Running Lighthouse for ${url}`);
 
-    // Run Lighthouse
-    console.log(`Running Lighthouse for ${url}...`);
     const lhr = await runLighthouse(url);
 
-    // Initial Processing
-    delete (lhr as any).i18n;
-    delete (lhr as any).categoryGroups;
-    delete (lhr as any).entities;
-    delete (lhr as any).timing;
-    if ((lhr as any).fullPageScreenshot) delete (lhr as any).fullPageScreenshot;
+    // Deep clone to avoid side effects
+    const rawLhr = JSON.parse(JSON.stringify(lhr));
 
-    // Remove performance if only accessibility was requested (though we forced it in runLighthouse)
-    if (lhr.categories && (lhr.categories as any).performance) {
-      delete (lhr.categories as any).performance;
+    /**
+     * Remove heavy image data
+     * These blow up payload size & are useless for backend processing
+     */
+    if (rawLhr.audits?.["final-screenshot"]) {
+      delete rawLhr.audits["final-screenshot"];
     }
 
-    const failedAccessibilityAudits = extractFailedAccessibilityAudits(lhr);
-    const accessibilityIssues = enrichAccessibilityAudits(failedAccessibilityAudits);
-    const fixBuckets = groupIssuesIntoFixBuckets(failedAccessibilityAudits);
-    const accessibilityAnalysis = generateAccessibilityAnalysisPrompt(fixBuckets.buckets);
-    const categorizedAudits = categorizeAudits(lhr);
-
-    // Flatten audits and generate expert guide
-    const flattenedAudits = flattenAuditsToText(categorizedAudits);
-    const expertFixGuide = await generateExpertFixGuide(flattenedAudits);
-
-    // Cleanup LHR further
-    removeDescriptions(lhr);
-    const prunedLhr = pruneEmpty(lhr);
-
-    // Generate Owner Summary with Gemini
-    let ownerSummary = "Your website is being analyzed for accessibility.";
-    if (process.env.GEMINI_API_KEY && fixBuckets.buckets.length > 0) {
-      try {
-        const bucketSummary = fixBuckets.buckets
-          .slice(0, 3)
-          .map(b => `${b.bucketName}: ${b.totalFailures} issues`)
-          .join(", ");
-
-        const prompt = `You are explaining website accessibility issues to a non-technical website owner.
-        Issues found: ${bucketSummary}
-        Write a friendly, reassuring explanation in simple language. Max 120 words. Focus on why it matters and that it's fixable. No technical terms or WCAG references.`;
-
-        const result = await model.generateContent(prompt);
-        ownerSummary = result.response.text().trim();
-      } catch (e) {
-        console.error("Gemini failed", e);
-        ownerSummary = "We found some accessibility issues that could make it harder for some visitors to use. These are common and fixable!";
-      }
-    } else if (fixBuckets.buckets.length === 0) {
-      ownerSummary = "Great news! Your website passed our accessibility checks.";
+    if (rawLhr.audits?.["full-page-screenshot"]) {
+      delete rawLhr.audits["full-page-screenshot"];
     }
 
-    const reportToStore = {
-      lhr: JSON.parse(JSON.stringify(prunedLhr)),
-      accessibilityIssues,
-      fixBuckets,
-      accessibilityAnalysis,
-      ownerSummary,
-      expertFixGuide,
-      categorizedAudits: pruneEmpty(categorizedAudits),
-    };
-
-    console.log(`Saving report to Firestore with docId: ${docId}`);
-    try {
-      await docRef.set({
-        report: reportToStore,
-        url: normalized,
-        cachedAt: FieldValue.serverTimestamp(),
-      });
-      console.log(`Successfully saved report for ${url}`);
-    } catch (dbErr: any) {
-      console.error(`Error saving to Firestore: ${dbErr.message}`);
-      // We still return the JSON since the audit was successful, 
-      // but the user should know about the DB failure in logs.
+    if (rawLhr.fullPageScreenshot) {
+      delete rawLhr.fullPageScreenshot;
     }
 
-    return res.json(reportToStore);
+    // OPTIONAL: remove runtime timing noise (still “raw-ish”)
+    if (rawLhr.timing) {
+      delete rawLhr.timing;
+    }
+
+    return res.json(rawLhr);
   } catch (err: any) {
-    console.error("Audit error:", err);
-    return res.status(500).json({ error: "internal error", details: err.message });
+    console.error("[audit/raw] error:", err);
+    return res.status(500).json({
+      error: "internal error",
+      details: err.message,
+    });
   }
 });
 
 
-// GET endpoints for fetching parts of the report
-
+// POST endpoints for fetching parts of the report
 app.post("/audit/filtered", async (req: Request, res: Response) => {
   try {
     const { url } = req.body;
@@ -843,31 +897,60 @@ app.post("/audit/filtered", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "missing url" });
     }
 
-    const docId = getDocId(url);
-    const doc = await db.collection("audits").doc(docId).get();
-    if (!doc.exists) {
-      return res.status(404).json({ error: "not found" });
+    const normalizedUrl = normalizeUrl(url);
+
+    // Run Lighthouse on the original URL
+    const lhr = await runLighthouse(url);
+
+    if (!lhr?.audits || !lhr?.categories?.accessibility) {
+      throw new Error("Invalid Lighthouse result");
     }
 
-    const lhr = doc.data()?.report?.lhr;
-    if (!lhr || !lhr.audits) {
-      return res.json({ audits: {} });
-    }
+    // Get accessibility audit IDs
+    const accessibilityAuditIds = new Set<string>(
+      lhr.categories.accessibility.auditRefs.map((ref: { id: string }) => ref.id)
+    );
 
     const filteredAudits: Record<string, any> = {};
 
-    for (const [auditKey, audit] of Object.entries(lhr.audits)) {
-      if ((audit as any)?.score === 0) {
-        // Clone to avoid mutating stored LHR
-        const auditCopy = JSON.parse(JSON.stringify(audit));
+    for (const auditId of accessibilityAuditIds) {
+      const audit = lhr.audits[auditId];
+      if (!audit || audit.score !== 0) continue;
 
-        // Remove noisy / heavy fields everywhere
-        deepRemoveKeys(auditCopy, ["items", "debugData"]);
-
-        filteredAudits[auditKey] = auditCopy;
-      }
+      filteredAudits[auditId] = {
+        id: audit.id,
+        title: audit.title,
+        score: audit.score,
+        scoreDisplayMode: audit.scoreDisplayMode,
+        details: audit.details
+          ? {
+              type: audit.details.type,
+              headings: audit.details.headings ?? [],
+            }
+          : undefined,
+      };
     }
 
+    // Convert filtered audits to string for Firestore
+    const auditsString = JSON.stringify(filteredAudits);
+
+    // Store minimal record in Firestore
+    await db.collection("audits").add({
+      url: normalizedUrl,
+      score:
+        accessibilityAuditIds.size === 0
+          ? 100
+          : Math.round(
+              ((accessibilityAuditIds.size - Object.keys(filteredAudits).length) /
+                accessibilityAuditIds.size) *
+                100
+            ),
+      status: "completed",
+      timestamp: FieldValue.serverTimestamp(),
+      audits: auditsString, // ✅ store as string
+    });
+
+    // Return parsed JSON to client
     return res.json({
       audits: filteredAudits,
     });
@@ -875,36 +958,155 @@ app.post("/audit/filtered", async (req: Request, res: Response) => {
     console.error("audit/filtered error:", err);
     return res.status(500).json({
       error: "internal error",
-      details: err?.message,
+      details: err.message,
     });
   }
 });
 
-app.post("/audit/analysis", async (req, res) => {
+
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+app.post("/audit/analysis", async (req: Request, res: Response) => {
   try {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: "missing url" });
-    const docId = getDocId(url);
-    const doc = await db.collection("audits").doc(docId).get();
-    if (!doc.exists) return res.status(404).json({ error: "not found" });
-    return res.json({ analysis: doc.data()?.report?.accessibilityAnalysis || "" });
+
+    const normalizedUrl = normalizeUrl(url);
+    const docRef = db.collection("audits").doc(getDocId(normalizedUrl));
+    let doc = await docRef.get();
+
+    let auditsJson: any = null;
+
+    if (doc.exists) {
+      const auditsStr = doc.data()?.audits;
+      if (auditsStr) auditsJson = JSON.parse(auditsStr);
+    }
+
+    // If no audits, call filtered endpoint logic
+    if (!auditsJson) {
+      const lhr = await runLighthouse(url);
+      const accessibilityAuditIds = new Set<string>(
+        lhr.categories.accessibility.auditRefs.map((ref: { id: string }) => ref.id)
+      );
+
+      const filteredAudits: Record<string, any> = {};
+      for (const auditId of accessibilityAuditIds) {
+        const audit = lhr.audits[auditId];
+        if (!audit || audit.score !== 0) continue;
+
+        filteredAudits[auditId] = {
+          id: audit.id,
+          title: audit.title,
+          score: audit.score,
+          scoreDisplayMode: audit.scoreDisplayMode,
+          details: audit.details
+            ? { type: audit.details.type, headings: audit.details.headings ?? [] }
+            : undefined,
+        };
+      }
+
+      auditsJson = filteredAudits;
+      await docRef.set({
+        url: normalizedUrl,
+        audits: JSON.stringify(filteredAudits),
+        status: "completed",
+        timestamp: FieldValue.serverTimestamp(),
+      });
+    }
+
+    // Use a working model for your key
+    const model = "models/gemini-flash-latest";
+
+    let geminiReport = "Unable to generate report";
+
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: `You are an expert developer assistant. Here is a JSON of failing accessibility audits:\n${JSON.stringify(
+          auditsJson,
+          null,
+          2
+        )}\nProvide a detailed analysis for a developer explaining what each issue is, where it occurs, why it matters, and how to fix it.`,
+      });
+      geminiReport = response.text || "Unable to generate report";
+    } catch (e) {
+      console.error("Gemini failed:", e);
+      geminiReport =
+        "Failed to generate detailed report via Gemini. Using your current API key, this is expected if model access is restricted.\nError: " + e;
+    }
+
+    return res.json({ analysis: geminiReport });
   } catch (err: any) {
+    console.error("audit/analysis error:", err);
     return res.status(500).json({ error: err.message });
   }
 });
+
 
 app.post("/audit/summary", async (req, res) => {
   try {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: "missing url" });
-    const docId = getDocId(url);
-    const doc = await db.collection("audits").doc(docId).get();
-    if (!doc.exists) return res.status(404).json({ error: "not found" });
-    return res.json({ summary: doc.data()?.report?.ownerSummary || "" });
+
+    const normalizedUrl = normalizeUrl(url);
+    const docId = getDocId(normalizedUrl);
+
+    let doc = await db.collection("audits").doc(docId).get();
+    let ownerSummary: string | undefined = doc.data()?.report?.ownerSummary;
+
+    // If no ownerSummary, regenerate audits using /audit/filtered logic
+    if (!ownerSummary) {
+      // Run Lighthouse and filter accessibility audits (same logic as /audit/filtered)
+      const lhr = await runLighthouse(url);
+
+      const accessibilityAuditIds = new Set<string>(
+        lhr.categories.accessibility.auditRefs.map((ref: { id: string }) => ref.id)
+      );
+
+      const filteredAudits: Record<string, any> = {};
+      for (const auditId of accessibilityAuditIds) {
+        const audit = lhr.audits[auditId];
+        if (!audit || audit.score !== 0) continue;
+
+        filteredAudits[auditId] = {
+          id: audit.id,
+          title: audit.title,
+          score: audit.score,
+          scoreDisplayMode: audit.scoreDisplayMode,
+          details: audit.details
+            ? { type: audit.details.type, headings: audit.details.headings ?? [] }
+            : undefined,
+        };
+      }
+
+      // Generate a simple summary
+      ownerSummary =
+        Object.keys(filteredAudits).length === 0
+          ? "Great news! Your website passed our accessibility checks."
+          : `We found ${Object.keys(filteredAudits).length} accessibility issues on your website. These are common and can be fixed easily.`;
+
+      // Store back in Firestore
+      await db.collection("audits").doc(docId).set({
+        url: normalizedUrl,
+        report: {
+          ownerSummary,
+          audits: JSON.stringify(filteredAudits),
+        },
+        status: "completed",
+        timestamp: FieldValue.serverTimestamp(),
+      });
+
+      doc = await db.collection("audits").doc(docId).get();
+    }
+
+    return res.json({ summary: ownerSummary });
   } catch (err: any) {
+    console.error("audit/summary error:", err);
     return res.status(500).json({ error: err.message });
   }
 });
+
+
 
 export const api = onRequest({
   timeoutSeconds: 300,
