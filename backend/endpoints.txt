@@ -1,0 +1,14 @@
+BASE_URL (Local): http://localhost:5001/october-november-dreampi/us-central1/api
+
+POST /audit/raw
+- Runs a Lighthouse accessibility audit on the provided URL.
+- Request Body: { "url": "https://example.com" }
+- Response: Processed report JSON including accessibility issues, fix buckets, and Gemini summary.
+
+POST /audit/filtered
+- Returns the filtered Lighthouse LHR JSON (score 0 audits only, items and debugData pruned).
+- Request Body: { "url": "https://example.com" }
+
+POST /audit/analysis
+- Returns a human-readable accessibility assessment.
+- Request Body: { "url": "https://example.com" }
